@@ -15,6 +15,12 @@ router.use(verificarToken)
 
 const ESTADO_ENTREGADO = 7
 
+const LIMITE_MAXIMO = 50
+const FILTRO_ESTADO = {
+  pendiente: 'AND e.resultado_entrega IS NULL',
+  entregado: 'AND e.resultado_entrega IS NOT NULL',
+}
+
 async function buscarEnvioDelTransportista(pool, idEnvio, idTransportista) {
   const resultado = await pool.request()
     .input('id', idEnvio)
@@ -59,8 +65,20 @@ router.get('/mis-envios', permitirRoles(ROLES.TRANSPORTISTA), conMensajeDeError(
     return res.json([])
   }
 
-  const resEnvios = await pool.request()
-    .input('id_trans', idTransportista)
+  const { estado } = req.query
+  if (estado !== undefined && !Object.hasOwn(FILTRO_ESTADO, estado)) {
+    return res.status(400).json({ error: 'Estado inválido' })
+  }
+
+  const limite = Math.min(parseInt(req.query.limit), LIMITE_MAXIMO)
+  const pagina = Math.max(parseInt(req.query.page) || 1, 1)
+  const paginar = limite > 0
+
+  const consulta = pool.request().input('id_trans', idTransportista)
+  if (paginar) {
+    consulta.input('offset', (pagina - 1) * limite).input('limit', limite)
+  }
+  const resEnvios = await consulta
     .query(`
       SELECT
         e.id_envio, e.nro_envio,
@@ -75,7 +93,9 @@ router.get('/mis-envios', permitirRoles(ROLES.TRANSPORTISTA), conMensajeDeError(
       FROM Envios e
       JOIN Pedidos p ON e.id_pedido = p.id_pedido
       WHERE e.id_transportista = @id_trans
-      ORDER BY e.fecha_despacho DESC
+      ${estado ? FILTRO_ESTADO[estado] : ''}
+      ORDER BY e.fecha_despacho DESC, e.id_envio DESC
+      ${paginar ? 'OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY' : ''}
     `)
 
   const envios = resEnvios.recordset
